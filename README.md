@@ -1,4 +1,4 @@
-# 📚 Grimoire Plugin 📚
+# 📜🪶 Grimoire Plugin 🪄🔮
 
 ## 📖 What this repository is
 
