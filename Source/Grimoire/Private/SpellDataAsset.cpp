@@ -1,23 +1,16 @@
 #include "SpellDataAsset.h"
 
+#include "SpellCompiler.h"
+#include "SpellGraphValidator.h"
 #include "SpellNodeDefinition.h"
 
 namespace
 {
-    const FSpellPinData* FindPinById(const FSpellNodeInstance& Node, const FGuid& PinId)
-    {
-        for (const FSpellPinData& Pin : Node.Pins)
-        {
-            if (Pin.PinId == PinId)
-            {
-                return &Pin;
-            }
-        }
-
-        return nullptr;
-    }
-
-    const FSpellPinData* FindPinByNameAndDirection(const FSpellNodeInstance& Node, const FName& PinName, ESpellPinDirection Direction)
+    const FSpellPinData* FindPinByNameAndDirection(
+        const FSpellNodeInstance& Node,
+        const FName& PinName,
+        ESpellPinDirection Direction
+    )
     {
         for (const FSpellPinData& Pin : Node.Pins)
         {
@@ -30,30 +23,43 @@ namespace
         return nullptr;
     }
 
-    bool ArePinsCompatible(const FSpellPinData& FromPin, const FSpellPinData& ToPin)
+    int32 FindLayoutIndex(const TArray<FSpellNodeLayoutData>& NodeLayouts, const FGuid& NodeId)
     {
-        if (FromPin.Direction != ESpellPinDirection::Output || ToPin.Direction != ESpellPinDirection::Input)
+        for (int32 Index = 0; Index < NodeLayouts.Num(); ++Index)
         {
-            return false;
+            if (NodeLayouts[Index].NodeId == NodeId)
+            {
+                return Index;
+            }
         }
 
-        if (FromPin.ValueType == ToPin.ValueType)
-        {
-            return true;
-        }
+        return INDEX_NONE;
+    }
+}
 
-        if (FromPin.AllowedConnectionTypes.Contains(ToPin.ValueType))
-        {
-            return true;
-        }
-
-        if (ToPin.AllowedConnectionTypes.Contains(FromPin.ValueType))
-        {
-            return true;
-        }
-
+bool ArePinsCompatible(const FSpellPinData& FromPin, const FSpellPinData& ToPin)
+{
+    if (FromPin.Direction != ESpellPinDirection::Output || ToPin.Direction != ESpellPinDirection::Input)
+    {
         return false;
     }
+
+    if (FromPin.ValueType == ToPin.ValueType)
+    {
+        return true;
+    }
+
+    if (FromPin.AllowedConnectionTypes.Contains(ToPin.ValueType))
+    {
+        return true;
+    }
+
+    if (ToPin.AllowedConnectionTypes.Contains(FromPin.ValueType))
+    {
+        return true;
+    }
+
+    return false;
 }
 
 USpellDataAsset::USpellDataAsset()
@@ -64,6 +70,16 @@ USpellDataAsset::USpellDataAsset()
 
 void USpellDataAsset::EnsureStableIds()
 {
+    if (AssetVersion <= 0)
+    {
+        AssetVersion = 1;
+    }
+
+    if (Graph.GraphVersion <= 0)
+    {
+        Graph.GraphVersion = 1;
+    }
+
     for (FSpellNodeInstance& Node : Graph.Nodes)
     {
         if (!Node.NodeId.IsValid())
@@ -91,6 +107,56 @@ void USpellDataAsset::EnsureStableIds()
     if (SpellId.IsNone())
     {
         SpellId = FName(*GetName());
+    }
+}
+
+void USpellDataAsset::EnsureNodeLayouts()
+{
+    TSet<FGuid> ValidNodeIds;
+    ValidNodeIds.Reserve(Graph.Nodes.Num());
+
+    for (const FSpellNodeInstance& Node : Graph.Nodes)
+    {
+        if (Node.NodeId.IsValid())
+        {
+            ValidNodeIds.Add(Node.NodeId);
+        }
+    }
+
+    TSet<FGuid> SeenLayoutIds;
+    for (int32 Index = Graph.EditorData.NodeLayouts.Num() - 1; Index >= 0; --Index)
+    {
+        const FGuid LayoutNodeId = Graph.EditorData.NodeLayouts[Index].NodeId;
+        const bool bRemoveLayout =
+            !LayoutNodeId.IsValid() ||
+            !ValidNodeIds.Contains(LayoutNodeId) ||
+            SeenLayoutIds.Contains(LayoutNodeId);
+
+        if (bRemoveLayout)
+        {
+            Graph.EditorData.NodeLayouts.RemoveAt(Index);
+            continue;
+        }
+
+        SeenLayoutIds.Add(LayoutNodeId);
+    }
+
+    for (const FSpellNodeInstance& Node : Graph.Nodes)
+    {
+        if (!Node.NodeId.IsValid())
+        {
+            continue;
+        }
+
+        if (FindLayoutIndex(Graph.EditorData.NodeLayouts, Node.NodeId) != INDEX_NONE)
+        {
+            continue;
+        }
+
+        FSpellNodeLayoutData NewLayout;
+        NewLayout.NodeId = Node.NodeId;
+        NewLayout.Position = Node.GraphPosition;
+        Graph.EditorData.NodeLayouts.Add(NewLayout);
     }
 }
 
@@ -151,23 +217,283 @@ void USpellDataAsset::RebuildNodePinsFromDefinitions()
     }
 }
 
+FGuid USpellDataAsset::AddNodeFromDefinition(USpellNodeDefinition* NodeDefinition, const FVector2D& GraphPosition, FName DesiredInstanceName)
+{
+    if (!NodeDefinition)
+    {
+        return FGuid();
+    }
+
+    FSpellNodeInstance NewNode;
+    NewNode.NodeId = FGuid::NewGuid();
+    NewNode.NodeDefinition = NodeDefinition;
+    NewNode.NodeInstanceName = DesiredInstanceName.IsNone()
+        ? (NodeDefinition->DefinitionId.IsNone() ? FName(*NodeDefinition->GetName()) : NodeDefinition->DefinitionId)
+        : DesiredInstanceName;
+    NewNode.GraphPosition = GraphPosition;
+
+    Graph.Nodes.Add(MoveTemp(NewNode));
+
+    RebuildNodePinsFromDefinitions();
+    EnsureStableIds();
+    ValidateGraph();
+
+    return Graph.Nodes.Last().NodeId;
+}
+
+bool USpellDataAsset::RemoveNodeById(const FGuid& NodeId)
+{
+    if (!NodeId.IsValid())
+    {
+        return false;
+    }
+
+    const int32 RemovedNodeCount = Graph.Nodes.RemoveAll(
+        [&NodeId](const FSpellNodeInstance& Node)
+        {
+            return Node.NodeId == NodeId;
+        }
+    );
+
+    if (RemovedNodeCount <= 0)
+    {
+        return false;
+    }
+
+    Graph.Edges.RemoveAll(
+        [&NodeId](const FSpellEdgeData& Edge)
+        {
+            return Edge.FromNodeId == NodeId || Edge.ToNodeId == NodeId;
+        }
+    );
+
+    EnsureStableIds();
+    ValidateGraph();
+    return true;
+}
+
+bool USpellDataAsset::RemoveEdgeById(const FGuid& EdgeId)
+{
+    if (!EdgeId.IsValid())
+    {
+        return false;
+    }
+
+    const int32 RemovedEdgeCount = Graph.Edges.RemoveAll(
+        [&EdgeId](const FSpellEdgeData& Edge)
+        {
+            return Edge.EdgeId == EdgeId;
+        }
+    );
+
+    if (RemovedEdgeCount <= 0)
+    {
+        return false;
+    }
+
+    EnsureStableIds();
+    ValidateGraph();
+    return true;
+}
+
+bool USpellDataAsset::ConnectPinsByName(const FGuid& FromNodeId, FName FromPinName, const FGuid& ToNodeId, FName ToPinName, FString& OutError)
+{
+    OutError = TEXT("");
+
+    if (!FromNodeId.IsValid() || !ToNodeId.IsValid())
+    {
+        OutError = TEXT("Both node ids must be valid.");
+        return false;
+    }
+
+    RebuildNodePinsFromDefinitions();
+    EnsureStableIds();
+
+    const FSpellNodeInstance* FromNode = FindNode(FromNodeId);
+    if (!FromNode)
+    {
+        OutError = FString::Printf(TEXT("Source node %s was not found."), *FromNodeId.ToString());
+        return false;
+    }
+
+    const FSpellNodeInstance* ToNode = FindNode(ToNodeId);
+    if (!ToNode)
+    {
+        OutError = FString::Printf(TEXT("Target node %s was not found."), *ToNodeId.ToString());
+        return false;
+    }
+
+    const FSpellPinData* FromPin = FindPinByNameAndDirection(*FromNode, FromPinName, ESpellPinDirection::Output);
+    if (!FromPin)
+    {
+        OutError = FString::Printf(
+            TEXT("Source pin '%s' was not found as an output pin on node %s."),
+            *FromPinName.ToString(),
+            *FromNodeId.ToString()
+        );
+        return false;
+    }
+
+    const FSpellPinData* ToPin = FindPinByNameAndDirection(*ToNode, ToPinName, ESpellPinDirection::Input);
+    if (!ToPin)
+    {
+        OutError = FString::Printf(
+            TEXT("Target pin '%s' was not found as an input pin on node %s."),
+            *ToPinName.ToString(),
+            *ToNodeId.ToString()
+        );
+        return false;
+    }
+
+    if (!ArePinsCompatible(*FromPin, *ToPin))
+    {
+        OutError = FString::Printf(
+            TEXT("Pins are incompatible (%s -> %s)."),
+            *FromPin->PinName.ToString(),
+            *ToPin->PinName.ToString()
+        );
+        return false;
+    }
+
+    for (const FSpellEdgeData& Edge : Graph.Edges)
+    {
+        if (Edge.FromNodeId == FromNodeId &&
+            Edge.FromPinId == FromPin->PinId &&
+            Edge.ToNodeId == ToNodeId &&
+            Edge.ToPinId == ToPin->PinId)
+        {
+            ValidateGraph();
+            return true;
+        }
+
+        if (!FromPin->bSupportsMultipleConnections && Edge.FromPinId == FromPin->PinId)
+        {
+            OutError = FString::Printf(
+                TEXT("Source pin '%s' does not allow multiple outgoing connections."),
+                *FromPin->PinName.ToString()
+            );
+            return false;
+        }
+
+        if (!ToPin->bSupportsMultipleConnections && Edge.ToPinId == ToPin->PinId)
+        {
+            OutError = FString::Printf(
+                TEXT("Target pin '%s' does not allow multiple incoming connections."),
+                *ToPin->PinName.ToString()
+            );
+            return false;
+        }
+    }
+
+    FSpellEdgeData NewEdge;
+    NewEdge.EdgeId = FGuid::NewGuid();
+    NewEdge.FromNodeId = FromNodeId;
+    NewEdge.FromPinId = FromPin->PinId;
+    NewEdge.ToNodeId = ToNodeId;
+    NewEdge.ToPinId = ToPin->PinId;
+
+    Graph.Edges.Add(MoveTemp(NewEdge));
+
+    EnsureStableIds();
+    ValidateGraph();
+
+    if (!bLastValidationSucceeded)
+    {
+        Graph.Edges.RemoveAt(Graph.Edges.Num() - 1);
+        ValidateGraph();
+
+        OutError = LastValidationMessage.IsEmpty()
+            ? TEXT("Connecting the pins would make the graph invalid.")
+            : LastValidationMessage;
+
+        return false;
+    }
+
+    return true;
+}
+
+bool USpellDataAsset::DisconnectPinsByName(const FGuid& FromNodeId, FName FromPinName, const FGuid& ToNodeId, FName ToPinName)
+{
+    RebuildNodePinsFromDefinitions();
+    EnsureStableIds();
+
+    const FSpellNodeInstance* FromNode = FindNode(FromNodeId);
+    const FSpellNodeInstance* ToNode = FindNode(ToNodeId);
+
+    if (!FromNode || !ToNode)
+    {
+        return false;
+    }
+
+    const FSpellPinData* FromPin = FindPinByNameAndDirection(*FromNode, FromPinName, ESpellPinDirection::Output);
+    const FSpellPinData* ToPin = FindPinByNameAndDirection(*ToNode, ToPinName, ESpellPinDirection::Input);
+
+    if (!FromPin || !ToPin)
+    {
+        return false;
+    }
+
+    const int32 RemovedEdgeCount = Graph.Edges.RemoveAll(
+        [FromNodeId, ToNodeId, FromPinId = FromPin->PinId, ToPinId = ToPin->PinId](const FSpellEdgeData& Edge)
+        {
+            return Edge.FromNodeId == FromNodeId &&
+                Edge.FromPinId == FromPinId &&
+                Edge.ToNodeId == ToNodeId &&
+                Edge.ToPinId == ToPinId;
+        }
+    );
+
+    if (RemovedEdgeCount <= 0)
+    {
+        return false;
+    }
+
+    EnsureStableIds();
+    ValidateGraph();
+    return true;
+}
+
+bool USpellDataAsset::GetPinIdByName(const FGuid& NodeId, FName PinName, ESpellPinDirection Direction, FGuid& OutPinId) const
+{
+    OutPinId.Invalidate();
+
+    const FSpellNodeInstance* Node = FindNode(NodeId);
+    if (!Node)
+    {
+        return false;
+    }
+
+    const FSpellPinData* Pin = FindPinByNameAndDirection(*Node, PinName, Direction);
+    if (!Pin)
+    {
+        return false;
+    }
+
+    OutPinId = Pin->PinId;
+    return OutPinId.IsValid();
+}
+
 void USpellDataAsset::ValidateGraph()
 {
-    FString ErrorMessage;
-    bLastValidationSucceeded = IsGraphStructurallyValid(ErrorMessage);
+    LastValidationResult = USpellGraphValidator::RunValidation(this);
+    bLastValidationSucceeded = !LastValidationResult.HasErrors();
 
-    if (bLastValidationSucceeded)
+    const FString Summary = LastValidationResult.BuildSummary();
+    if (LastValidationResult.Issues.Num() > 0)
     {
-        LastValidationMessage = FString::Printf(
-            TEXT("Graph is structurally valid. Nodes: %d, Edges: %d"),
-            Graph.Nodes.Num(),
-            Graph.Edges.Num()
-        );
+        LastValidationMessage = Summary + TEXT(" First issue: ") + LastValidationResult.Issues[0].Message;
     }
     else
     {
-        LastValidationMessage = ErrorMessage;
+        LastValidationMessage = Summary;
     }
+}
+
+void USpellDataAsset::CompileSpell()
+{
+    LastCompiledDefinition = UGWTSpellCompiler::RunCompile(this);
+    bLastCompileSucceeded = LastCompiledDefinition.bCompileSucceeded;
+    LastCompileMessage = LastCompiledDefinition.BuildSummary();
 }
 
 int32 USpellDataAsset::GetNodeCount() const
@@ -185,118 +511,33 @@ bool USpellDataAsset::ContainsNode(const FGuid& NodeId) const
     return FindNode(NodeId) != nullptr;
 }
 
-bool USpellDataAsset::IsGraphStructurallyValid(FString& OutError) const
+FVector2D USpellDataAsset::GetNodePosition(const FGuid& NodeId) const
 {
-    TSet<FGuid> SeenNodeIds;
-    TSet<FGuid> SeenEdgeIds;
-
-    if (Graph.GraphVersion <= 0)
+    if (const FSpellNodeLayoutData* Layout = FindNodeLayout(NodeId))
     {
-        OutError = TEXT("GraphVersion must be greater than zero.");
-        return false;
+        return Layout->Position;
     }
 
-    for (const FSpellNodeInstance& Node : Graph.Nodes)
+    return FVector2D::ZeroVector;
+}
+
+void USpellDataAsset::SetNodePosition(const FGuid& NodeId, const FVector2D& NewPosition)
+{
+    if (FSpellNodeLayoutData* Layout = FindNodeLayoutMutable(NodeId))
     {
-        if (!Node.NodeId.IsValid())
-        {
-            OutError = TEXT("A node has an invalid NodeId.");
-            return false;
-        }
-
-        if (SeenNodeIds.Contains(Node.NodeId))
-        {
-            OutError = FString::Printf(TEXT("Duplicate NodeId found: %s"), *Node.NodeId.ToString());
-            return false;
-        }
-
-        SeenNodeIds.Add(Node.NodeId);
-
-        if (!Node.NodeDefinition)
-        {
-            OutError = FString::Printf(TEXT("Node %s has no NodeDefinition assigned."), *Node.NodeId.ToString());
-            return false;
-        }
-
-        TSet<FGuid> SeenPinIds;
-        for (const FSpellPinData& Pin : Node.Pins)
-        {
-            if (!Pin.PinId.IsValid())
-            {
-                OutError = FString::Printf(TEXT("Node %s contains a pin with an invalid PinId."), *Node.NodeId.ToString());
-                return false;
-            }
-
-            if (SeenPinIds.Contains(Pin.PinId))
-            {
-                OutError = FString::Printf(TEXT("Node %s contains duplicate PinIds."), *Node.NodeId.ToString());
-                return false;
-            }
-
-            SeenPinIds.Add(Pin.PinId);
-        }
+        Layout->Position = NewPosition;
+        return;
     }
 
-    for (const FSpellEdgeData& Edge : Graph.Edges)
+    if (!ContainsNode(NodeId))
     {
-        if (!Edge.EdgeId.IsValid())
-        {
-            OutError = TEXT("An edge has an invalid EdgeId.");
-            return false;
-        }
-
-        if (SeenEdgeIds.Contains(Edge.EdgeId))
-        {
-            OutError = FString::Printf(TEXT("Duplicate EdgeId found: %s"), *Edge.EdgeId.ToString());
-            return false;
-        }
-
-        SeenEdgeIds.Add(Edge.EdgeId);
-
-        const FSpellNodeInstance* FromNode = FindNode(Edge.FromNodeId);
-        const FSpellNodeInstance* ToNode = FindNode(Edge.ToNodeId);
-
-        if (!FromNode)
-        {
-            OutError = FString::Printf(TEXT("Edge %s references missing source node %s."), *Edge.EdgeId.ToString(), *Edge.FromNodeId.ToString());
-            return false;
-        }
-
-        if (!ToNode)
-        {
-            OutError = FString::Printf(TEXT("Edge %s references missing target node %s."), *Edge.EdgeId.ToString(), *Edge.ToNodeId.ToString());
-            return false;
-        }
-
-        const FSpellPinData* FromPin = FindPinById(*FromNode, Edge.FromPinId);
-        const FSpellPinData* ToPin = FindPinById(*ToNode, Edge.ToPinId);
-
-        if (!FromPin)
-        {
-            OutError = FString::Printf(TEXT("Edge %s references missing source pin %s."), *Edge.EdgeId.ToString(), *Edge.FromPinId.ToString());
-            return false;
-        }
-
-        if (!ToPin)
-        {
-            OutError = FString::Printf(TEXT("Edge %s references missing target pin %s."), *Edge.EdgeId.ToString(), *Edge.ToPinId.ToString());
-            return false;
-        }
-
-        if (!ArePinsCompatible(*FromPin, *ToPin))
-        {
-            OutError = FString::Printf(
-                TEXT("Edge %s connects incompatible pins (%s -> %s)."),
-                *Edge.EdgeId.ToString(),
-                *FromPin->PinName.ToString(),
-                *ToPin->PinName.ToString()
-            );
-            return false;
-        }
+        return;
     }
 
-    OutError = TEXT("");
-    return true;
+    FSpellNodeLayoutData NewLayout;
+    NewLayout.NodeId = NodeId;
+    NewLayout.Position = NewPosition;
+    Graph.EditorData.NodeLayouts.Add(NewLayout);
 }
 
 const FSpellNodeInstance* USpellDataAsset::FindNode(const FGuid& NodeId) const
@@ -325,20 +566,50 @@ FSpellNodeInstance* USpellDataAsset::FindNodeMutable(const FGuid& NodeId)
     return nullptr;
 }
 
+const FSpellNodeLayoutData* USpellDataAsset::FindNodeLayout(const FGuid& NodeId) const
+{
+    const int32 LayoutIndex = FindLayoutIndex(Graph.EditorData.NodeLayouts, NodeId);
+    if (LayoutIndex == INDEX_NONE)
+    {
+        return nullptr;
+    }
+
+    return &Graph.EditorData.NodeLayouts[LayoutIndex];
+}
+
+FSpellNodeLayoutData* USpellDataAsset::FindNodeLayoutMutable(const FGuid& NodeId)
+{
+    const int32 LayoutIndex = FindLayoutIndex(Graph.EditorData.NodeLayouts, NodeId);
+    if (LayoutIndex == INDEX_NONE)
+    {
+        return nullptr;
+    }
+
+    return &Graph.EditorData.NodeLayouts[LayoutIndex];
+}
+
 void USpellDataAsset::PostLoad()
 {
     Super::PostLoad();
+
+    EnsureStableIds();
     RebuildNodePinsFromDefinitions();
     EnsureStableIds();
+    EnsureNodeLayouts();
     ValidateGraph();
+    CompileSpell();
 }
 
 #if WITH_EDITOR
 void USpellDataAsset::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
     Super::PostEditChangeProperty(PropertyChangedEvent);
+
+    EnsureStableIds();
     RebuildNodePinsFromDefinitions();
     EnsureStableIds();
+    EnsureNodeLayouts();
     ValidateGraph();
+    CompileSpell();
 }
 #endif
