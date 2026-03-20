@@ -1,21 +1,76 @@
-MIT License
+# Grimoire Plugin Repository Notice
 
-Copyright (c) 2026 don-Done
+Copyright (c) 2026 WizWare / Grand Wizard Tournament. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## 1. Repository status
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This repository is publicly visible for reference, learning, documentation, design discussion, development transparency, and curated community feedback.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Unless a specific file or folder is clearly marked otherwise, the contents of this repository are **not** released under an open-source license.
+
+## 2. Rights reserved
+
+All rights are reserved in and to the code, architecture, systems, editor workflows, runtime logic, plugin structures, designs, names, documentation, text, images, examples, and all other material contained in this repository.
+
+No permission is granted to copy, modify, adapt, redistribute, sublicense, sell, commercialize, rehost, port, package, publish, train on, or incorporate any part of this repository into another game, plugin, framework, product, service, tutorial product, or codebase without prior written permission from the copyright holder.
+
+## 3. Public visibility does not equal free use
+
+This repository is public so that interested people can read it, learn from it, follow its direction, and participate in discussion where invited.
+
+Public visibility does **not** mean that the repository is free to reuse.
+
+No general permission is granted to:
+- use the code in another plugin or game,
+- redistribute copies of the repository,
+- publish derivative versions,
+- claim compatibility, affiliation, or endorsement,
+- or repurpose repository content outside the limited access needed for GitHub itself and any rights that apply under mandatory law.
+
+## 4. Purpose of this public repository
+
+The purpose of this repository is to make the Grimoire system understandable.
+
+It exists so that people can:
+- study the technical direction,
+- understand how spell authoring is intended to work,
+- follow the development of the system behind Grand Wizard Tournament,
+- and propose spell ideas or feedback in a structured and reviewable form.
+
+This repository is not an unrestricted open collaboration space. It is a curated public-facing development repository.
+
+## 5. Spell proposals and submissions
+
+This repository may be used as a place for spell ideas, spell structure proposals, feedback, or other curated submissions.
+
+The project owner may review, reject, ignore, refine, respond to, or internally reinterpret any submission at sole discretion.
+
+Nothing in this repository creates any obligation to:
+- accept a proposal,
+- merge a contribution,
+- include an idea in the game,
+- credit a suggestion publicly,
+- compensate a submitter,
+- or adopt submitted material in any form.
+
+If code or content is ever considered for official inclusion, separate written terms or a contributor agreement may be required before acceptance.
+
+## 6. Separate terms for expressly marked materials
+
+If a specific file or folder is clearly marked under different terms, those specific terms apply only to that marked material.
+
+Such marking does not alter the status of the rest of the repository.
+
+## 7. No trademark, identity, or endorsement rights
+
+No trademark, title, project identity, branding, naming, lore, worldbuilding, trade dress, or endorsement rights are granted by this notice.
+
+You may not present copied, adapted, or related work as official, approved, associated with, or derived with permission from Grand Wizard Tournament or the Grimoire Plugin without prior written permission.
+
+## 8. No warranty
+
+This repository and all of its contents are provided “as is,” without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, non-infringement, accuracy, performance, or availability.
+
+## 9. Contact
+
+For permission requests, licensing questions, collaboration inquiries, or official use requests, contact the project owner through the repository profile or any official project contact channel listed by the project.
